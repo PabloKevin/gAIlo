@@ -4,14 +4,22 @@ Configuration settings for the Telegram Alarm Bot
 
 import pytz
 from datetime import datetime
+import os
+from dotenv import load_dotenv
+from pathlib import Path
 
-TELEGRAM_BOT_TOKEN = ""
+# Carga .env buscando desde el cwd hacia arriba
+ENV_PATH = Path(__file__).resolve().parent / ".env"
+
+load_dotenv(dotenv_path=ENV_PATH)
+
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 class Config:
     """Configuration class for the alarm bot"""
     
     # Default timezone - can be overridden per user
-    DEFAULT_TIMEZONE = 'America/Montevideo'
+    DEFAULT_TIMEZONE = os.getenv("DEFAULT_TIMEZONE")
     
     # Wake-up messages
     WAKE_UP_MESSAGES = [

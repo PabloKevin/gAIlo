@@ -58,8 +58,9 @@ class AlarmScheduler:
                 callback=self._send_alarm_message,
                 time=alarm_time,
                 days=(0, 1, 2, 3, 4, 5, 6),
-                context=job_context,
-                name=f"alarm_{user_id}_{time_str}"
+                data=job_context,
+                name=f"alarm_{user_id}_{time_str}",
+                #tzinfo=timezone 
             )
 
             
@@ -158,7 +159,7 @@ class AlarmScheduler:
             context: Job context containing user and chat information
         """
         try:
-            job_context = context.job.context
+            job_context = getattr(context.job, "data", None)
             chat_id = job_context['chat_id']
             time_str = job_context['time_str']
             
