@@ -10,6 +10,7 @@ from telegram.ext import Application, CommandHandler, JobQueue
 from config import Config
 from bot.handlers import AlarmHandlers
 from bot.alarm import AlarmScheduler
+from llm.model import LLM_Client
 
 from config import TELEGRAM_BOT_TOKEN
 
@@ -36,7 +37,8 @@ def main():
 
         
         # Initialize alarm scheduler
-        alarm_scheduler = AlarmScheduler()
+        LLM = LLM_Client()
+        alarm_scheduler = AlarmScheduler(llm=LLM)
         
         # Initialize handlers
         handlers = AlarmHandlers(alarm_scheduler)
@@ -44,7 +46,7 @@ def main():
         # Register command handlers
         application.add_handler(CommandHandler('start', handlers.start_command))
         application.add_handler(CommandHandler('help', handlers.help_command))
-        application.add_handler(CommandHandler('alarma', handlers.set_alarm_command))
+        application.add_handler(CommandHandler(["alarm",  "alarma"], handlers.set_alarm_command))
         application.add_handler(CommandHandler('list', handlers.list_alarms_command))
         application.add_handler(CommandHandler('remove', handlers.remove_alarm_command))
         application.add_handler(CommandHandler('removeall', handlers.remove_all_alarms_command))

@@ -1,10 +1,24 @@
 # LLM interaction logic
 
-def get_llm_response(prompt: str) -> str:
-    # Aquí deberías integrar un modelo real o usar una API como OpenAI o HuggingFace
-    # Esta función simula una respuesta del LLM.
-    return f"Simulación de respuesta a: {prompt}"
+import os
+import httpx
 
-def cargar_personalidad() -> str:
-    with open("llm/personality.txt", "r", encoding="utf-8") as f:
-        return f.read()
+class LLM_Client:
+    def __init__(self, host=None, model=None, timeout=30.0):
+        self.host = host or os.getenv("LLM_HOST")
+        self.model = model or os.getenv("OLLAMA_MODEL")
+        self.timeout = timeout
+
+    def cargar_personalidad(self) -> str:
+        with open("llm/personality.txt", "r", encoding="utf-8") as f:
+            return f.read()
+
+    async def generate(self, prompt_t_alarm: str) -> str:
+        prompt = self.cargar_personalidad() + prompt_t_alarm
+        payload = {"model": self.model, "prompt": prompt, "stream": False}
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            r = await client.post(f"{self.host}/api/generate", json=payload)
+            r.raise_for_status()
+            data = r.json()
+            return (data.get("response") or "").strip()
+

@@ -51,27 +51,27 @@ class Config:
     
     # Help text
     HELP_TEXT = """
-🤖 *Bot de Alarmas Diarias*
+        🤖 *Bot de Alarmas Diarias*
 
-*Comandos disponibles:*
+        *Comandos disponibles:*
 
-/alarma HH:MM - Configura una alarma diaria
-  Ejemplo: `/alarma 07:30`
+        /alarma HH:MM - Configura una alarma diaria
+        Ejemplo: `/alarma 07:30`
 
-/list - Muestra todas tus alarmas activas
+        /list - Muestra todas tus alarmas activas
 
-/remove HH:MM - Elimina una alarma específica
-  Ejemplo: `/remove 07:30`
+        /remove HH:MM - Elimina una alarma específica
+        Ejemplo: `/remove 07:30`
 
-/removeall - Elimina todas tus alarmas
+        /removeall - Elimina todas tus alarmas
 
-/help - Muestra este mensaje de ayuda
+        /help - Muestra este mensaje de ayuda
 
-*Formato de hora:* HH:MM (24 horas)
-*Zona horaria:* Montevideo, Uruguay (GMT-3)
+        *Formato de hora:* HH:MM (24 horas)
+        *Zona horaria:* Montevideo, Uruguay (GMT-3)
 
-¡Las alarmas se repetirán todos los días a la hora configurada! ⏰
-"""
+        ¡Las alarmas se repetirán todos los días a la hora configurada! ⏰
+        """
     
     @staticmethod
     def validate_time_format(time_str):

@@ -8,16 +8,23 @@ from datetime import datetime, time
 from telegram.ext import Application
 from config import Config
 import pytz
+import os
 
 logger = logging.getLogger(__name__)
 
 class AlarmScheduler:
     """Handles alarm scheduling and management"""
     
-    def __init__(self):
+    def __init__(self, llm=None):
         self.user_alarms = {}  # user_id -> {time_str: job}
         self.config = Config()
-        self.timezone = pytz.timezone(self.config.DEFAULT_TIMEZONE)  # Add this line
+        self.timezone = pytz.timezone(self.config.DEFAULT_TIMEZONE)  
+        self.llm = llm
+
+        logger.info(
+            "LLM enabled=%s provider=ollama host=%s model=%s",
+            self.llm is not None, os.getenv("LLM_HOST"), os.getenv("OLLAMA_MODEL")
+        )
     
     def add_alarm(self, application: Application, user_id: int, time_str: str, chat_id: int):
         """
@@ -59,8 +66,7 @@ class AlarmScheduler:
                 time=alarm_time,
                 days=(0, 1, 2, 3, 4, 5, 6),
                 data=job_context,
-                name=f"alarm_{user_id}_{time_str}",
-                #tzinfo=timezone 
+                name=f"alarm_{user_id}_{time_str}"
             )
 
             
@@ -163,20 +169,27 @@ class AlarmScheduler:
             chat_id = job_context['chat_id']
             time_str = job_context['time_str']
             
-            # Select random wake-up message
-            message = random.choice(self.config.WAKE_UP_MESSAGES)
+            # Si hay LLM local, generamos uno dinámico
+            if self.llm is not None:
+                prompt = (f"Hora programada: {time_str}. No uses formato markdown.")
+                try:
+                    message = await self.llm.generate(prompt)
+                except Exception as e:
+                    logger.exception("LLM falló, uso fallback fijo: %s", e)
+            #Por defecto: mensaje fijo
+            else:
+                message = random.choice(self.config.WAKE_UP_MESSAGES)
             
-            # Add time information to message
-            full_message = f"{message}\n\n⏰ Alarma programada: {time_str}"
             
             # Send message
             await context.bot.send_message(
-                chat_id=chat_id,
-                text=full_message,
-                parse_mode='HTML'
+                chat_id = chat_id,
+                text = message,
+                parse_mode = 'HTML'
             )
             
             logger.info(f"Alarm message sent to chat {chat_id} for time {time_str}")
             
         except Exception as e:
+            # Se podría poner un mensaje random aquí también para que se envíe incluso si falla el LLM, pero ahora mismo se quiere ver bien si falla.
             logger.error(f"Error sending alarm message: {e}")

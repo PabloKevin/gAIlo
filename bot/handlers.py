@@ -21,17 +21,17 @@ class AlarmHandlers:
         """Handle /start command"""
         try:
             welcome_message = """
-🤖 ¡Bienvenido al Bot de Alarmas Diarias!
+                🤖 ¡Bienvenido al Bot de Alarmas Diarias!
 
-Este bot te permite configurar alarmas que se repetirán todos los días a la hora que elijas.
+                Este bot te permite configurar alarmas que se repetirán todos los días a la hora que elijas.
 
-Para comenzar, usa el comando:
-`/alarma HH:MM`
+                Para comenzar, usa el comando:
+                `/alarma HH:MM`
 
-Por ejemplo: `/alarma 07:30`
+                Por ejemplo: `/alarma 07:30`
 
-Usa /help para ver todos los comandos disponibles.
-"""
+                Usa /help para ver todos los comandos disponibles.
+                """
             
             await update.message.reply_text(
                 welcome_message,
