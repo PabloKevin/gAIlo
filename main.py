@@ -6,7 +6,7 @@ Telegram Alarm Bot - Main application entry point
 import logging
 import os
 import pytz
-from telegram.ext import Application, CommandHandler, JobQueue
+from telegram.ext import Application, CommandHandler, JobQueue, MessageHandler, filters
 from config import Config
 from bot.handlers import AlarmHandlers
 from bot.alarm import AlarmScheduler
@@ -50,6 +50,8 @@ def main():
         application.add_handler(CommandHandler('list', handlers.list_alarms_command))
         application.add_handler(CommandHandler('remove', handlers.remove_alarm_command))
         application.add_handler(CommandHandler('removeall', handlers.remove_all_alarms_command))
+        application.add_handler(CommandHandler('despierto', handlers.wake_ack_command))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.conversation_message))
         
         # Set the alarm scheduler reference in the application
         application.alarm_scheduler = alarm_scheduler

@@ -58,6 +58,8 @@ class Config:
         /alarma HH:MM - Configura una alarma diaria
         Ejemplo: `/alarma 07:30`
 
+        /despierto - Marca que ya te levantaste y cierra la conversación
+
         /list - Muestra todas tus alarmas activas
 
         /remove HH:MM - Elimina una alarma específica

@@ -44,6 +44,25 @@ class AlarmHandlers:
             logger.error(f"Error in start command: {e}")
             await update.message.reply_text(self.config.ERROR_MESSAGES['general_error'])
     
+    async def conversation_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Recibe texto normal y, si hay conversación activa, responde con el LLM."""
+        user_id = update.effective_user.id
+        text = (update.message.text or "").strip()
+        if self.alarm_scheduler.has_active_conversation(user_id):
+            await self.alarm_scheduler.reply_in_conversation(user_id, text, context.bot)
+        else:
+            # Si no hay conversación activa, lo dejamos como no-comando ignorado
+            # o podrías responder algo suave aquí si lo preferís.
+            pass
+
+    async def wake_ack_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """El usuario confirma que despertó: cierra la conversación."""
+        user_id = update.effective_user.id
+        if self.alarm_scheduler.stop_conversation(user_id):
+            await update.message.reply_text("✅ ¡Genial! Me alegra que ya estés despiert@. ¡Que tengas un día tremendo!")
+        else:
+            await update.message.reply_text("No hay una conversación de alarma activa en este momento.")
+    
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /help command"""
         try:
