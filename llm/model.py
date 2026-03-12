@@ -1,12 +1,16 @@
-# LLM interaction logic
+# LLM interaction logic — Groq backend
 
 import os
-import httpx
+from groq import AsyncGroq
 
 class LLM_Client:
-    def __init__(self, host=None, model=None, timeout=30.0):
-        self.host = host or os.getenv("LLM_HOST")
-        self.model = model or os.getenv("OLLAMA_MODEL")
+    def __init__(self, model=None, timeout=30.0):
+        api_key = os.getenv("GROQ_API_KEY")
+        if not api_key:
+            raise ValueError("GROQ_API_KEY environment variable not set")
+
+        self.client = AsyncGroq(api_key=api_key)
+        self.model = model or os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
         self.timeout = timeout
 
     def cargar_personalidad(self) -> str:
@@ -14,11 +18,20 @@ class LLM_Client:
             return f.read()
 
     async def generate(self, prompt_t_alarm: str) -> str:
-        prompt = self.cargar_personalidad() + prompt_t_alarm
-        payload = {"model": self.model, "prompt": prompt, "stream": False}
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            r = await client.post(f"{self.host}/api/generate", json=payload)
-            r.raise_for_status()
-            data = r.json()
-            return (data.get("response") or "").strip()
+        """
+        Generate a response using Groq's chat completion API.
+        Keeps the same interface as the Ollama version — nothing else needs to change.
+        """
+        system_prompt = self.cargar_personalidad()
 
+        chat_completion = await self.client.chat.completions.create(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user",   "content": prompt_t_alarm},
+            ],
+            model=self.model,
+            temperature=0.85,      # a bit of variety each morning
+            max_tokens=256,        # keep replies concise for a wake-up chat
+        )
+
+        return (chat_completion.choices[0].message.content or "").strip()
