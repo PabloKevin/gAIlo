@@ -1,7 +1,8 @@
 """
 Alarm scheduling & conversational flow for the Telegram bot.
-Alarms are persisted in SQLite so they survive restarts.
-Supports audio (edge-tts) and text modes, switchable per conversation.
+- Alarms persisted in SQLite (survives restarts)
+- Audio (edge-tts) and text modes, switchable per message
+- Language (es/en) configurable per alarm and per message
 """
 
 import logging
@@ -18,15 +19,46 @@ logger = logging.getLogger(__name__)
 
 DB_PATH = Path(os.getenv("DB_PATH", "alarms.db"))
 
-TEXT_MODE_TRIGGERS = [
-    "texto", "text", "escribe", "escribí", "sin audio",
-    "sin voz", "solo texto", "en texto"
-]
+# --- Mode triggers ---
+TEXT_MODE_TRIGGERS  = ["texto", "text", "escribe", "escribí", "sin audio", "sin voz", "solo texto", "en texto"]
+AUDIO_MODE_TRIGGERS = ["audio", "voz", "habla", "hablame", "háblame", "con voz", "con audio", "en audio"]
 
-AUDIO_MODE_TRIGGERS = [
-    "audio", "voz", "habla", "hablame", "háblame",
-    "con voz", "con audio", "en audio"
-]
+# --- Language triggers ---
+ES_TRIGGERS = ["español", "espanol", "en español", "castellano", "spanish", "habla español"]
+EN_TRIGGERS = ["inglés", "ingles", "en inglés", "english", "in english", "speak english"]
+
+# --- LLM language instructions ---
+LANG_PROMPTS = {
+    "es": "Responde siempre en español.",
+    "en": "Always respond in English.",
+}
+
+# --- Fallback messages per language ---
+FALLBACK_REPLIES = {
+    "es": [
+        "¡Sigamos! ¿Qué vas a hacer en los próximos 5 minutos?",
+        "¿Te levantás y tomás agua?",
+        "¿Cuál es tu mini-objetivo de hoy?",
+    ],
+    "en": [
+        "Let's go! What are you doing in the next 5 minutes?",
+        "How about getting up and drinking some water?",
+        "What's your mini goal for today?",
+    ],
+}
+
+# --- Mode change confirmation messages per language ---
+MODE_CHANGE_MSG = {
+    ("audio", "es"): "👌 Cambiando a modo audio.",
+    ("text",  "es"): "👌 Cambiando a modo texto.",
+    ("audio", "en"): "👌 Switching to audio mode.",
+    ("text",  "en"): "👌 Switching to text mode.",
+}
+
+LANG_CHANGE_MSG = {
+    "es": "👌 Cambiando a español.",
+    "en": "👌 Switching to English.",
+}
 
 
 def _get_conn() -> sqlite3.Connection:
@@ -36,9 +68,15 @@ def _get_conn() -> sqlite3.Connection:
             user_id  INTEGER NOT NULL,
             chat_id  INTEGER NOT NULL,
             time_str TEXT    NOT NULL,
+            lang     TEXT    NOT NULL DEFAULT 'en',
             PRIMARY KEY (user_id, time_str)
         )
     """)
+    # Migration: add lang column if it doesn't exist yet
+    try:
+        conn.execute("ALTER TABLE alarms ADD COLUMN lang TEXT NOT NULL DEFAULT 'en'")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
     conn.commit()
     return conn
 
@@ -48,6 +86,7 @@ class AlarmScheduler:
 
     def __init__(self, llm=None):
         self.user_alarms: dict[int, dict[str, object]] = {}
+        # session keys: chat_id, time_str, history, mode ("audio"|"text"), lang ("es"|"en")
         self.active_conversations: dict[int, dict] = {}
         self.config = Config()
         self.timezone = pytz.timezone(self.config.DEFAULT_TIMEZONE)
@@ -59,11 +98,11 @@ class AlarmScheduler:
     # =========================
     def restore_alarms(self, application: Application):
         with _get_conn() as conn:
-            rows = conn.execute("SELECT user_id, chat_id, time_str FROM alarms").fetchall()
+            rows = conn.execute("SELECT user_id, chat_id, time_str, lang FROM alarms").fetchall()
         restored = 0
-        for user_id, chat_id, time_str in rows:
+        for user_id, chat_id, time_str, lang in rows:
             try:
-                self._schedule_job(application, user_id, chat_id, time_str)
+                self._schedule_job(application, user_id, chat_id, time_str, lang)
                 restored += 1
             except Exception as e:
                 logger.error("Could not restore alarm %s for user %s: %s", time_str, user_id, e)
@@ -72,7 +111,7 @@ class AlarmScheduler:
     # =========================
     # Alarm management
     # =========================
-    def add_alarm(self, application: Application, user_id: int, time_str: str, chat_id: int):
+    def add_alarm(self, application: Application, user_id: int, time_str: str, chat_id: int, lang: str = "en"):
         try:
             is_valid, error_key = self.config.validate_time_format(time_str)
             if not is_valid:
@@ -81,11 +120,12 @@ class AlarmScheduler:
                 return False, self.config.ERROR_MESSAGES['alarm_exists']
             with _get_conn() as conn:
                 conn.execute(
-                    "INSERT OR IGNORE INTO alarms (user_id, chat_id, time_str) VALUES (?, ?, ?)",
-                    (user_id, chat_id, time_str)
+                    "INSERT OR IGNORE INTO alarms (user_id, chat_id, time_str, lang) VALUES (?, ?, ?, ?)",
+                    (user_id, chat_id, time_str, lang)
                 )
-            self._schedule_job(application, user_id, chat_id, time_str)
-            return True, self.config.SUCCESS_MESSAGES['alarm_set'].format(time=time_str)
+            self._schedule_job(application, user_id, chat_id, time_str, lang)
+            lang_label = "🇬🇧 English" if lang == "en" else "🇺🇾 Español"
+            return True, self.config.SUCCESS_MESSAGES['alarm_set'].format(time=time_str) + f" · {lang_label}"
         except Exception as e:
             logger.error("Error adding alarm: %s", e)
             return False, self.config.ERROR_MESSAGES['general_error']
@@ -132,13 +172,13 @@ class AlarmScheduler:
     # =========================
     # Internal scheduling
     # =========================
-    def _schedule_job(self, application: Application, user_id: int, chat_id: int, time_str: str):
+    def _schedule_job(self, application: Application, user_id: int, chat_id: int, time_str: str, lang: str = "en"):
         hour, minute = map(int, time_str.split(':'))
         job = application.job_queue.run_daily(
             callback=self._send_alarm_message,
             time=time(hour=hour, minute=minute),
             days=(0, 1, 2, 3, 4, 5, 6),
-            data={'user_id': user_id, 'chat_id': chat_id, 'time_str': time_str},
+            data={'user_id': user_id, 'chat_id': chat_id, 'time_str': time_str, 'lang': lang},
             name=f"alarm_{user_id}_{time_str}"
         )
         if user_id not in self.user_alarms:
@@ -146,25 +186,33 @@ class AlarmScheduler:
         self.user_alarms[user_id][time_str] = job
 
     # =========================
-    # Mode detection
+    # Mode & language detection
     # =========================
     def _detect_mode_change(self, text: str, current_mode: str) -> str:
         text_lower = text.lower()
-        if any(trigger in text_lower for trigger in TEXT_MODE_TRIGGERS):
+        if any(t in text_lower for t in TEXT_MODE_TRIGGERS):
             return "text"
-        if any(trigger in text_lower for trigger in AUDIO_MODE_TRIGGERS):
+        if any(t in text_lower for t in AUDIO_MODE_TRIGGERS):
             return "audio"
         return current_mode
+
+    def _detect_lang_change(self, text: str, current_lang: str) -> str:
+        text_lower = text.lower()
+        if any(t in text_lower for t in ES_TRIGGERS):
+            return "es"
+        if any(t in text_lower for t in EN_TRIGGERS):
+            return "en"
+        return current_lang
 
     # =========================
     # Send message helper
     # =========================
-    async def _send_message(self, bot, chat_id: int, text: str, mode: str):
-        """Send as voice note or text depending on mode. Falls back to text if TTS fails."""
+    async def _send_message(self, bot, chat_id: int, text: str, mode: str, lang: str):
+        """Send as voice note or text. Falls back to text if TTS fails."""
         if mode == "audio":
             try:
                 from llm.tts import text_to_audio
-                audio_path = await text_to_audio(text)
+                audio_path = await text_to_audio(text, lang=lang)
                 if audio_path:
                     with open(audio_path, "rb") as f:
                         await bot.send_voice(chat_id=chat_id, voice=f)
@@ -194,22 +242,32 @@ class AlarmScheduler:
         if not session:
             return
 
-        # Detect mode change request
+        # Detect mode change
         new_mode = self._detect_mode_change(user_text, session["mode"])
         if new_mode != session["mode"]:
             session["mode"] = new_mode
-            mode_msg = "👌 Cambiando a modo texto." if new_mode == "text" else "👌 Cambiando a modo audio."
-            await bot.send_message(chat_id=session["chat_id"], text=mode_msg)
+            msg = MODE_CHANGE_MSG.get((new_mode, session["lang"]), "👌 OK")
+            await bot.send_message(chat_id=session["chat_id"], text=msg)
+
+        # Detect language change
+        new_lang = self._detect_lang_change(user_text, session["lang"])
+        if new_lang != session["lang"]:
+            session["lang"] = new_lang
+            msg = LANG_CHANGE_MSG.get(new_lang, "👌 OK")
+            await bot.send_message(chat_id=session["chat_id"], text=msg)
 
         session["history"].append(("user", user_text))
         session["history"] = session["history"][-10:]
 
+        lang_instruction = LANG_PROMPTS.get(session["lang"], LANG_PROMPTS["en"])
+
         prompt = (
-            "Continúa la conversación para ayudar a despertar. "
-            "No repitas saludos. No uses markdown.\n\n"
-            "Historial (más reciente al final):\n"
+            f"{lang_instruction} "
+            "Continue the conversation to help wake up. "
+            "Do not repeat greetings. Do not use markdown.\n\n"
+            "Conversation history (most recent at the bottom):\n"
             f"{self._format_history(session['history'])}\n\n"
-            "Asistente:"
+            "Assistant:"
         )
 
         if self.llm is not None:
@@ -219,16 +277,12 @@ class AlarmScheduler:
                     raise RuntimeError("Empty LLM response")
             except Exception as e:
                 logger.exception("LLM failed: %s", e)
-                answer = "¡Sigamos! ¿Qué vas a hacer en los próximos 5 minutos?"
+                answer = random.choice(FALLBACK_REPLIES[session["lang"]])
         else:
-            answer = random.choice([
-                "¡Bien! ¿Qué vas a hacer primero?",
-                "¿Te levantás y tomás agua?",
-                "¿Cuál es tu mini-objetivo de hoy?"
-            ])
+            answer = random.choice(FALLBACK_REPLIES[session["lang"]])
 
         session["history"].append(("assistant", answer))
-        await self._send_message(bot, session["chat_id"], answer, session["mode"])
+        await self._send_message(bot, session["chat_id"], answer, session["mode"], session["lang"])
 
     # =========================
     # Alarm job callback
@@ -243,16 +297,20 @@ class AlarmScheduler:
             chat_id  = job_context['chat_id']
             user_id  = job_context['user_id']
             time_str = job_context['time_str']
+            lang     = job_context.get('lang', 'en')
 
+            lang_instruction = LANG_PROMPTS.get(lang, LANG_PROMPTS["en"])
             message = None
+
             if self.llm is not None:
                 prompt = (
-                    "Este es el primer mensaje para ayudar a despertar. Saluda brevemente.\n"
-                    "Inicia una conversación interesante con una pregunta que rompa el hielo.\n"
-                    f"Hora programada: {time_str}. No uses formato markdown.\n\n"
-                    "Ejemplos de estilo:\n"
-                    "- ¡Arriba! ¿Qué vas a hacer primero en los próximos 5 minutos?\n"
-                    "- ¡Buen día! ¿Cuál es tu mini-objetivo de la mañana?\n"
+                    f"{lang_instruction} "
+                    "This is the first wake-up message. Greet briefly. "
+                    "Start an interesting conversation with an icebreaker question. "
+                    f"Scheduled time: {time_str}. Do not use markdown.\n\n"
+                    "Style examples:\n"
+                    "- Rise and shine! What's the first thing you're doing in the next 5 minutes?\n"
+                    "- Good morning! What's your mini goal for today?\n"
                 )
                 try:
                     message = await self.llm.generate(prompt)
@@ -262,27 +320,34 @@ class AlarmScheduler:
             if not message:
                 message = random.choice(self.config.WAKE_UP_MESSAGES)
 
-            # Open session in audio mode by default
             self.active_conversations[user_id] = {
                 "chat_id": chat_id,
                 "time_str": time_str,
                 "history": [("assistant", message)],
                 "mode": "audio",
+                "lang": lang,
             }
 
-            # First message always as audio
-            await self._send_message(context.bot, chat_id, message, "audio")
+            await self._send_message(context.bot, chat_id, message, "audio", lang)
 
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=(
+            # Instructions in the session language
+            if lang == "es":
+                instructions = (
                     f"⏰ {time_str} · Respondé para continuar.\n"
+                    f"🌐 Decime 'en inglés' o 'en español' para cambiar idioma.\n"
                     f"💬 Decime 'en texto' o 'en audio' para cambiar el modo.\n"
                     f"✅ Cuando estés despiert@, enviá /despierto."
-                ),
-            )
+                )
+            else:
+                instructions = (
+                    f"⏰ {time_str} · Reply to continue.\n"
+                    f"🌐 Say 'in Spanish' or 'in English' to switch language.\n"
+                    f"💬 Say 'text mode' or 'audio mode' to switch format.\n"
+                    f"✅ When you're up, send /despierto."
+                )
 
-            logger.info("Alarm fired for user %s at %s", user_id, time_str)
+            await context.bot.send_message(chat_id=chat_id, text=instructions)
+            logger.info("Alarm fired for user %s at %s lang=%s", user_id, time_str, lang)
 
         except Exception as e:
             logger.error("Error in _send_alarm_message: %s", e)
